@@ -1,0 +1,171 @@
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import sys
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as transforms
+from torchvision.utils import save_image
+
+class MNISTDataset(Dataset):
+    def __init__ (self, transform = None):
+        xy = np.load(r'C:\Users\Diego\Desktop\Deep Learning\MNIST_train.npy', allow_pickle=True)
+        #los valores que vienen en los archivos npy son dtype uint8
+        #uint8 no sirve en Pytorch asi que hay que modificar dtype al crear los tensores
+
+        self.len = len(xy)
+
+        self.transform = transform
+
+        x = []
+        y = []
+
+        for i in xy:
+            x.append(i[0].reshape(28,28))
+            #i[0] es la imagen de (28,28)
+            #i[1] es la true class de la imagen (un numero)
+            y.append(i[1])
+
+        x = np.array(x)/255
+        #numpy array de shape (60000, 28, 28)
+        #60000 imagenes de 28 pixeles por 28 pixeles
+        #cada pixel tiene un valor que va entre 0 y 255
+        #dividir en 255 hace que el valor del pixel este entre 0 y 1
+        #trabajar con valores entre 0 y 1 al parecer aumenta la rapidez de entrenamiento 
+
+        y = np.array(y)
+        #numpy array de shape (60000,)
+        #y tiene las true classes de las imagenes en x
+
+        self.x = torch.tensor(x, dtype=torch.float)
+        #torch.Size([60000, 28, 28])
+        #al parecer los valores en los pixeles deben ser dtype float o double
+
+        self.y = torch.tensor(y, dtype=torch.long)
+        #torch.Size([60000])
+        #torch.long = torch.int64
+        #al parecer los valores de las clases deben ser dtype long
+
+    def __getitem__(self, index):
+        if self.transform:
+            x = self.transform(self.x[index])
+        
+        else:
+            x = self.x[index]
+
+        return x, self.y[index]
+
+    def __len__(self):
+        return self.len
+
+my_transforms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.RandomCrop((25,25)),
+    transforms.Resize((28,28)),
+    transforms.RandomRotation(degrees=10, fill=0),
+    #transforms.RandomVerticalFlip(p=0.05),
+    #transforms.RandomHorizontalFlip(p=0.5),
+    transforms.ColorJitter(brightness=(0.6,0.8)),
+    transforms.ToTensor()
+    ])
+
+dataset = MNISTDataset(transform = my_transforms)
+
+train_loader = DataLoader(dataset = dataset, batch_size = 1000, shuffle=True)
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1,10,kernel_size=5)
+        #1 seria el numero de channels de cada imagen (estan en grayscale)
+        #10 seria el numero de filtros a aplicar (asi que el numero de channels del output)
+        self.pool = nn.MaxPool2d(kernel_size=2,stride=2)
+        self.conv2 = nn.Conv2d(10,20,kernel_size=5)
+        self.fc1 = nn.Linear(20*4*4, 64)
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc2 = nn.Linear(64, 10)
+        
+    def forward(self,x):
+    #x seria un tensor en 4D
+    #x seria de size (# samples por batch, 1, alto, ancho)
+    #alto=ancho ya que las imagenes son cuadradas
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1,20*4*4)
+        #-1 tomaria el valor # de samples por batch
+        #en cada fila irian los elementos asociados a una imagen
+        #el orden en la fila seria cara - fila (el output de una imagen es un array de (20,4,4))
+        #1ra fila de la 1ra cara, 2da fila de la 1ra cara, y asi hasta llegar a la ultima fila de la ultima cara (20va cara)
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = F.softmax(self.fc2(x), dim=1)
+        
+        return x
+
+net = Net()
+
+loss_function=nn.NLLLoss()
+optimizer=optim.Adam(net.parameters())
+
+#fig, ax1 = plt.subplots()
+#ax2 = ax1.twinx()
+#
+#ax1.tick_params(axis='both', which='major', labelsize=11)
+#ax2.tick_params(axis='both', which='major', labelsize=11)#
+#
+#ax1.set_ylabel('Loss', fontsize=11)
+#ax2.set_ylabel('In-Batch Accuracy', fontsize=11)
+#ax1.set_xlabel('Iteration', fontsize=11)
+
+EPOCHS=20
+iteracion = 0
+
+for epoch in range(EPOCHS):
+    for data in train_loader:
+        inputs, labels = data
+        inputs = inputs.view(-1,1,28,28)
+
+        net.zero_grad()
+
+        probabilities=net(inputs)
+        print('probabilities')
+        print(type(probabilities))
+        print(probabilities.size())
+
+        matches=[torch.argmax(i)==int(j) for i,j in zip(probabilities,labels)]
+        print('matches')
+        print(type(matches))
+
+        in_batch_acc=matches.count(True)/len(matches)
+        print('in_batch_acc')
+        print(type(in_batch_acc))
+
+        loss=loss_function(torch.log(probabilities), labels)
+        print('loss')
+        print(type(loss))
+
+        if (iteracion/10 == int(iteracion/10)):
+            print('Loss:', round(float(loss), 3))
+            print('In-batch acc:', round(in_batch_acc, 2))
+
+        #ax1.scatter(iteracion, round(float(loss), 3), s = 7.5, color = 'blue', marker='o')
+        #ax2.scatter(iteracion, round(in_batch_acc, 2), s = 7.5, color = 'red', marker='o')
+
+        #plt.pause(0.01)
+
+        iteracion += 1
+
+        loss.backward()
+        optimizer.step()
+
+#FILE = r'C:\Users\Diego\Desktop\Deep Learning\net_MNIST.pth'
+#torch.save(net.state_dict(), FILE)
+
+print('entrenamiento finalizado')
+
+#plt.tight_layout()
+#plt.show()
