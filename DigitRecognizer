@@ -1,0 +1,111 @@
+import numpy as np
+import cv2
+import sys
+import torch.nn as nn
+import torch.nn.functional as F
+import torch
+#from MNIST_DataLoader import Net
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1,10,kernel_size=5)
+        #1 seria el numero de channels de cada imagen (estan en grayscale)
+        #10 seria el numero de filtros a aplicar (asi que el numero de channels del output)
+        self.pool = nn.MaxPool2d(kernel_size=2,stride=2)
+        self.conv2 = nn.Conv2d(10,20,kernel_size=5)
+        self.fc1 = nn.Linear(20*4*4, 64)
+        self.dropout = nn.Dropout(p=0.5)
+        self.fc2 = nn.Linear(64, 10)
+        
+    def forward(self,x):
+    #x seria un tensor en 4D
+    #x seria de size (# samples por batch, 1, alto, ancho)
+    #alto=ancho ya que las imagenes son cuadradas
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1,20*4*4)
+        #-1 tomaria el valor # de samples por batch
+        #en cada fila irian los elementos asociados a una imagen
+        #el orden en la fila seria cara - fila (el output de una imagen es un array de (20,4,4))
+        #1ra fila de la 1ra cara, 2da fila de la 1ra cara, y asi hasta llegar a la ultima fila de la ultima cara (20va cara)
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = F.softmax(self.fc2(x), dim=1)
+        
+        return x
+
+FILE = r'C:\Users\Diego\Desktop\Deep Learning\net_MNIST.pth'
+
+net = Net()
+net.load_state_dict(torch.load(FILE))
+net.eval()
+
+width = 640
+height = 480
+threshold = 85
+
+cap = cv2.VideoCapture(0)
+#cv2.VideoCapture(device)
+#al parecer cada dispositivo es representado por un numero 
+#0 corresponde a la camara del laptop
+#1 corresponderia a usar la camara del celular cuando esta conectado
+cap.set(3,width)
+#la idea es setear el ancho en pixeles de cada frame
+#al parecer 3 corresponde a CV_CAP_PROP_FRAME_WIDTH
+cap.set(4,height)
+#la idea es setear el alto en pixeles de cada frame
+#al parecer 4 corresponde a CV_CAP_PROP_FRAME_HEIGHT
+
+while True:
+    ret, imgOriginal = cap.read()
+    #read es la union de grab y retrieve 
+    #grab toma el frame que viene a continuacion c/r al momento de interpretacion de esta linea
+    #retrieve decodifica el frame tomado con grab y entrega un numpy array de 3 channels (imagen a color)
+    #los valores del numpy array son uint8 (enteros entre 0 y 255) 
+
+    imgGray = cv2.cvtColor(imgOriginal,cv2.COLOR_BGR2GRAY)
+    #pasando la imagen a color a grayscale
+    #numpy array en 2D de shape (480,640) en este caso
+
+    img = cv2.resize(imgGray,(28,28))
+    #creando nuevo array que seria la imagen en grayscale en tamaño 28 pixeles x 28 pixeles
+    img = img/255
+    #pasando a valores float en el intervalo [0,1]
+    img = 1-img
+    #que lo blanco sea negro y lo negro blanco
+    img[img < 0.6] = 0
+    #a los pixeles con valor menor a 0.6 (oscuros) se les asigna el valor 0
+
+    #el entrenamiento de la red neuronal se hizo con imagenes de (28,28) con valores en [0,1]
+    #con background negro y digitos en blanco
+    #asi que hacer estas transformaciones es necesario
+
+    img = torch.tensor(img, dtype=torch.float)
+    #pasando de numpy array a torch tensor
+    img = img.view(1,1,28,28)
+    #pasando el tensor de 2D a 4D (necesario para pasarlo a net)
+    
+    probabilities = net(img)
+    #torch tensor en 2D
+    #en este caso size [1,10] ya que cada img es un sample y hay 10 posibles clases
+    digito = torch.argmax(probabilities)
+    #torch.argmax entrega como return un tensor
+    digito = digito.numpy()
+    #aplicar numpy() a un tensor permite transformarlo en un numpy array
+    probability = torch.max(probabilities)
+    #torch.max entrega como return un tensor
+    probability = probability.detach().numpy()
+    #The detach() method constructs a new view on a tensor which is declared not to need gradients
+    #era necesario 1ro ocupar detach antes de transformar el tensor a un numpy array
+    #probability queda como un numpy array de shape ()
+    #ese al parecer es el shape de un numero como tal
+
+    if (100*probability >= threshold):
+        cv2.putText(imgGray, str(digito) + '  ' + str(round(100*probability))+'%', (50,50), cv2.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
+
+    cv2.imshow('imgGray', imgGray)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+    
+cap.release()
+cv2.destroyAllWindows()
